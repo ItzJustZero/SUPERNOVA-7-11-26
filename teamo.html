@@ -337,7 +337,8 @@ buildLayout();
 
 // ─── ASCII TEXT MASK ──────────────────────────────────────────────────────
 const TXT1 = "for my beloved";
-const TXT2 = "I love u \u2665";
+const TXT2_FULL = "I love u \u2665";
+const TXT2 = "I love u ";
 const TXT3 = "7/11/2026";
 const textMask = new Float32Array(N * 4);  // per cell: [lum, r, g, b]
 let txtCol1Lo = COLS, txtCol1Hi = 0;
@@ -345,7 +346,10 @@ let txtCol2Lo = COLS, txtCol2Hi = 0;
 let txtCol3Lo = COLS, txtCol3Hi = 0;
 let txtRowSplit = 0;   // first row of line 2
 let txtRow3Lo  = 0;    // first row of date
-const heartCenter = { x: 0, y: 0, radius: 25 };
+const heartCenter = { x: 0, y: 0, radius: 25, fs: 20, r: 0, c: 0 };
+let heartScale = 1.0, heartScaleVel = 0, isHeartHovered = false;
+const hCanvas = document.createElement("canvas");
+const hCtx = hCanvas.getContext("2d");
 
 (function buildTextMask() {
   const PW = COLS * CW, PH = ROWS * CH;
@@ -366,10 +370,10 @@ const heartCenter = { x: 0, y: 0, radius: 25 };
   while (fs1 > CH * 3 && ox.measureText(TXT1).width > maxPxW) {
     fs1--; ox.font = `italic 400 ${fs1}px Georgia, "Times New Roman", serif`;
   }
-  // Fit line 2 (bolder, slightly larger)
+  // Fit line 2 (bolder, slightly larger) - fit TXT2_FULL so both text and heart fit bounds
   let fs2 = CH * 14;
   ox.font = `italic 700 ${fs2}px Georgia, "Times New Roman", serif`;
-  while (fs2 > CH * 4 && ox.measureText(TXT2).width > maxPxW) {
+  while (fs2 > CH * 4 && ox.measureText(TXT2_FULL).width > maxPxW) {
     fs2--; ox.font = `italic 700 ${fs2}px Georgia, "Times New Roman", serif`;
   }
 
@@ -387,12 +391,15 @@ const heartCenter = { x: 0, y: 0, radius: 25 };
   ox.font = `italic 700 ${fs2}px Georgia, "Times New Roman", serif`;
   ox.fillText(TXT2, xPx, y2px);
 
-  // Measure exact position of the heart "♥" at the end of line 2
-  const prefixW = ox.measureText("I love u ").width;
+  // Measure exact position and grid coords of the heart "♥" right after "I love u "
+  const prefixW = ox.measureText(TXT2).width;
   const heartW  = ox.measureText("\u2665").width;
   heartCenter.x = xPx + prefixW + heartW * 0.5;
-  heartCenter.y = y2px + fs2 * 0.5;
-  heartCenter.radius = Math.max(heartW, fs2) * 1.4;
+  heartCenter.y = y2px + fs2 * 0.52;
+  heartCenter.fs = fs2;
+  heartCenter.r = Math.round(heartCenter.y / CH);
+  heartCenter.c = Math.round(heartCenter.x / CW);
+  heartCenter.radius = Math.max(heartW, fs2) * 1.5;
 
   // ── Date: bottom-right corner, smaller, right-aligned ────────────────
   let fs3 = CH * 7;
@@ -431,6 +438,8 @@ const heartCenter = { x: 0, y: 0, radius: 25 };
       else          { if (c < txtCol1Lo) txtCol1Lo = c; if (c > txtCol1Hi) txtCol1Hi = c; }
     }
   }
+  const heartEndCol = Math.round((heartCenter.x + heartCenter.radius * 0.7) / CW);
+  if (heartEndCol > txtCol2Hi) txtCol2Hi = heartEndCol;
 })();
 
 // ─── INTERACTION (Mouse follow) ──────────────────────────────────────────
@@ -542,6 +551,60 @@ function scene(t) {
     }
   }
 
+  // ── Dynamic Interactive Heart with Spring Bounce ────────────────────────
+  if (w2 > 0.6) {
+    const isHover = isHeartHovered && w2 >= 0.85;
+    const targetScale = isHover ? (1.35 + 0.08 * Math.sin(t * 8.5)) : 1.0;
+    const force = (targetScale - heartScale) * 0.28;
+    heartScaleVel = (heartScaleVel + force) * 0.70;
+    heartScale += heartScaleVel;
+
+    const currentFs = Math.max(8, Math.round(heartCenter.fs * heartScale));
+    const hDim = Math.ceil(currentFs * 1.8);
+    if (hCanvas.width !== hDim || hCanvas.height !== hDim) {
+      hCanvas.width = hDim;
+      hCanvas.height = hDim;
+    }
+    hCtx.clearRect(0, 0, hDim, hDim);
+    hCtx.textAlign = "center";
+    hCtx.textBaseline = "middle";
+    hCtx.fillStyle = "#fff";
+    hCtx.font = `italic 700 ${currentFs}px Georgia, "Times New Roman", serif`;
+    hCtx.fillText("\u2665", hDim / 2, hDim / 2);
+
+    const hData = hCtx.getImageData(0, 0, hDim, hDim).data;
+    const gridRows = Math.ceil(hDim / CH);
+    const gridCols = Math.ceil(hDim / CW);
+    const startR = heartCenter.r - Math.floor(gridRows / 2);
+    const startC = heartCenter.c - Math.floor(gridCols / 2);
+    const heartAlpha = smoothstep(0.65, 0.95, w2);
+
+    for (let gr = 0; gr < gridRows; gr++) {
+      const r = startR + gr;
+      if (r < 0 || r >= ROWS) continue;
+      for (let gc = 0; gc < gridCols; gc++) {
+        const c = startC + gc;
+        if (c < 0 || c >= COLS) continue;
+        const px0 = gc * CW, py0 = gr * CH;
+        let sum = 0;
+        for (let dy = 0; dy < CH; dy++) {
+          for (let dx = 0; dx < CW; dx++) {
+            const px = px0 + dx, py = py0 + dy;
+            if (px < hDim && py < hDim) {
+              sum += hData[(py * hDim + px) * 4 + 3];
+            }
+          }
+        }
+        const v = (sum / (CW * CH * 255)) * heartAlpha;
+        if (v < 0.04) continue;
+        const idx = r * COLS + c;
+        const shimmer = 0.055 * Math.max(0, Math.sin(TAU * (t - T2S - T2D) / 2.8));
+        const hoverBrightness = isHover ? 0.35 : 0;
+        set(idx, clamp(v * 1.15 + shimmer + hoverBrightness), 1.0, 1.0, 1.0);
+      }
+    }
+  }
+
   // Fade in
   const fade = smoothstep(0, 0.25, t);
   if (fade < 1) for (let i = 0; i < N; i++) lum[i] *= fade;
@@ -572,24 +635,28 @@ const glowA = document.createElement("canvas"), glowB = document.createElement("
 const heartParticles = [];
 let lastHeartNow = performance.now();
 
-function spawnHeartBurst(cx, cy, count = 45) {
+function spawnHeartBurst(cx, cy, count = 85) {
   for (let k = 0; k < count; k++) {
     const angle = Math.random() * Math.PI * 2;
-    // Radial burst with upward bias
-    const speed = 50 + Math.random() * 220;
-    const vx = Math.cos(angle) * speed;
-    const vy = Math.sin(angle) * speed * 0.75 - (80 + Math.random() * 95);
-    const life = 2.4 + Math.random() * 2.2;
-    const glyphs = ["\u2665", "\u2661", "\u2665", "\u2665", "*"];
+    // Ultra-wide radial burst spreading across the screen with upward lift
+    const speed = 70 + Math.random() * 320;
+    const vx = Math.cos(angle) * speed * 2.3;
+    const vy = Math.sin(angle) * speed * 0.85 - (110 + Math.random() * 150);
+    const riseSpeed = -(90 + Math.random() * 140);
+    const swayFreq = 1.8 + Math.random() * 2.8;
+    const swayAmp = 25 + Math.random() * 55;
+    const glyphs = ["\u2665", "\u2661", "\u2665", "\u2665", "\u2661", "*", "\u2727"];
     const glyph = glyphs[Math.floor(Math.random() * glyphs.length)];
-    const size = Math.round(FONT_SIZE * (0.9 + Math.random() * 1.6));
+    const size = Math.round(FONT_SIZE * (0.85 + Math.random() * 2.3));
     heartParticles.push({
-      x: cx + (Math.random() - 0.5) * 16,
-      y: cy + (Math.random() - 0.5) * 16,
+      x: cx + (Math.random() - 0.5) * 20,
+      y: cy + (Math.random() - 0.5) * 20,
       vx,
       vy,
+      riseSpeed,
+      swayFreq,
+      swayAmp,
       age: 0,
-      life,
       glyph,
       size,
       seed: Math.random() * 100
@@ -610,21 +677,26 @@ function updateAndDrawHearts(targetCtx) {
   for (let i = heartParticles.length - 1; i >= 0; i--) {
     const p = heartParticles[i];
     p.age += dt;
-    if (p.age >= p.life) {
+
+    // Physics: initial horizontal explosive blast dampens smoothly
+    p.vx *= Math.pow(0.88, dt * 60);
+    // Vertical velocity locks into steady upward cruising
+    p.vy += (p.riseSpeed - p.vy) * Math.min(1, 2.2 * dt);
+    p.x += (p.vx + Math.sin(p.seed + p.age * p.swayFreq) * p.swayAmp) * dt;
+    p.y += p.vy * dt;
+
+    // Disappear ONLY when reaching the top border of the screen
+    if (p.y <= -50 || p.age > 26) {
       heartParticles.splice(i, 1);
       continue;
     }
-    // Physics: drag + upward buoyancy lift + horizontal gentle sway
-    p.vx *= Math.pow(0.88, dt * 60);
-    p.vy -= 90 * dt; // upward acceleration
-    p.vy *= Math.pow(0.92, dt * 60);
-    p.x += p.vx * dt + Math.sin(p.seed + p.age * 4) * 0.9;
-    p.y += p.vy * dt;
 
-    const progress = p.age / p.life;
-    const fadeIn = Math.min(1, p.age / 0.12);
-    const fadeOut = 1 - Math.pow(progress, 2.2);
-    const alpha = Math.max(0, Math.min(1, fadeIn * fadeOut));
+    // Quick fade in at start
+    let alpha = Math.min(1, p.age / 0.15);
+    // Smoothly fade out only when nearing the top edge of the canvas (top 16%)
+    if (p.y < H * 0.16) {
+      alpha *= Math.max(0, (p.y + 40) / (H * 0.16 + 40));
+    }
 
     targetCtx.font = `bold ${p.size}px Menlo, Consolas, "DejaVu Sans Mono", monospace`;
     targetCtx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
@@ -659,20 +731,23 @@ function isOverHeart(clientX, clientY) {
   const { x, y } = getCanvasCoords({ clientX, clientY });
   const dx = x - heartCenter.x;
   const dy = y - heartCenter.y;
-  return Math.hypot(dx, dy) <= heartCenter.radius;
+  return Math.hypot(dx, dy) <= heartCenter.radius * 1.5;
 }
 
 view.addEventListener("pointermove", (e) => {
-  if (isOverHeart(e.clientX, e.clientY)) {
-    view.style.cursor = "pointer";
-  } else {
-    view.style.cursor = "default";
-  }
+  const over = isOverHeart(e.clientX, e.clientY);
+  isHeartHovered = over;
+  view.style.cursor = over ? "pointer" : "default";
+});
+
+view.addEventListener("pointerleave", () => {
+  isHeartHovered = false;
+  view.style.cursor = "default";
 });
 
 view.addEventListener("pointerdown", (e) => {
   if (isOverHeart(e.clientX, e.clientY)) {
-    spawnHeartBurst(heartCenter.x, heartCenter.y, 45);
+    spawnHeartBurst(heartCenter.x, heartCenter.y, 85);
   }
 });
 
