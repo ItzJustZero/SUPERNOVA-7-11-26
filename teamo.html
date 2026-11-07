@@ -345,6 +345,7 @@ let txtCol2Lo = COLS, txtCol2Hi = 0;
 let txtCol3Lo = COLS, txtCol3Hi = 0;
 let txtRowSplit = 0;   // first row of line 2
 let txtRow3Lo  = 0;    // first row of date
+const heartCenter = { x: 0, y: 0, radius: 25 };
 
 (function buildTextMask() {
   const PW = COLS * CW, PH = ROWS * CH;
@@ -385,6 +386,13 @@ let txtRow3Lo  = 0;    // first row of date
   ox.fillText(TXT1, xPx, y1px);
   ox.font = `italic 700 ${fs2}px Georgia, "Times New Roman", serif`;
   ox.fillText(TXT2, xPx, y2px);
+
+  // Measure exact position of the heart "♥" at the end of line 2
+  const prefixW = ox.measureText("I love u ").width;
+  const heartW  = ox.measureText("\u2665").width;
+  heartCenter.x = xPx + prefixW + heartW * 0.5;
+  heartCenter.y = y2px + fs2 * 0.5;
+  heartCenter.radius = Math.max(heartW, fs2) * 1.4;
 
   // ── Date: bottom-right corner, smaller, right-aligned ────────────────
   let fs3 = CH * 7;
@@ -560,6 +568,114 @@ const img = actx.createImageData(W, H), px = img.data, px32 = new Uint32Array(px
 const glowA = document.createElement("canvas"), glowB = document.createElement("canvas"), glowC = document.createElement("canvas");
 [[glowA, 2], [glowB, 4], [glowC, 8]].forEach(([g, s]) => { g.width = Math.ceil(W / s); g.height = Math.ceil(H / s); });
 
+// ─── ASCII HEART EXPLOSION PARTICLES ───────────────────────────────────────
+const heartParticles = [];
+let lastHeartNow = performance.now();
+
+function spawnHeartBurst(cx, cy, count = 45) {
+  for (let k = 0; k < count; k++) {
+    const angle = Math.random() * Math.PI * 2;
+    // Radial burst with upward bias
+    const speed = 50 + Math.random() * 220;
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed * 0.75 - (80 + Math.random() * 95);
+    const life = 2.4 + Math.random() * 2.2;
+    const glyphs = ["\u2665", "\u2661", "\u2665", "\u2665", "*"];
+    const glyph = glyphs[Math.floor(Math.random() * glyphs.length)];
+    const size = Math.round(FONT_SIZE * (0.9 + Math.random() * 1.6));
+    heartParticles.push({
+      x: cx + (Math.random() - 0.5) * 16,
+      y: cy + (Math.random() - 0.5) * 16,
+      vx,
+      vy,
+      age: 0,
+      life,
+      glyph,
+      size,
+      seed: Math.random() * 100
+    });
+  }
+}
+
+function updateAndDrawHearts(targetCtx) {
+  if (heartParticles.length === 0) return;
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - lastHeartNow) / 1000);
+  lastHeartNow = now;
+
+  targetCtx.save();
+  targetCtx.textBaseline = "middle";
+  targetCtx.textAlign = "center";
+
+  for (let i = heartParticles.length - 1; i >= 0; i--) {
+    const p = heartParticles[i];
+    p.age += dt;
+    if (p.age >= p.life) {
+      heartParticles.splice(i, 1);
+      continue;
+    }
+    // Physics: drag + upward buoyancy lift + horizontal gentle sway
+    p.vx *= Math.pow(0.88, dt * 60);
+    p.vy -= 90 * dt; // upward acceleration
+    p.vy *= Math.pow(0.92, dt * 60);
+    p.x += p.vx * dt + Math.sin(p.seed + p.age * 4) * 0.9;
+    p.y += p.vy * dt;
+
+    const progress = p.age / p.life;
+    const fadeIn = Math.min(1, p.age / 0.12);
+    const fadeOut = 1 - Math.pow(progress, 2.2);
+    const alpha = Math.max(0, Math.min(1, fadeIn * fadeOut));
+
+    targetCtx.font = `bold ${p.size}px Menlo, Consolas, "DejaVu Sans Mono", monospace`;
+    targetCtx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(3)})`;
+    targetCtx.fillText(p.glyph, p.x, p.y);
+  }
+  targetCtx.restore();
+}
+
+function getCanvasCoords(e) {
+  const rect = view.getBoundingClientRect();
+  const canvasAspect = W / H;
+  const elementAspect = rect.width / rect.height;
+  let renderW, renderH, renderX, renderY;
+  if (elementAspect > canvasAspect) {
+    renderH = rect.height;
+    renderW = rect.height * canvasAspect;
+    renderX = rect.left + (rect.width - renderW) / 2;
+    renderY = rect.top;
+  } else {
+    renderW = rect.width;
+    renderH = rect.width / canvasAspect;
+    renderX = rect.left;
+    renderY = rect.top + (rect.height - renderH) / 2;
+  }
+  const x = (e.clientX - renderX) * (W / renderW);
+  const y = (e.clientY - renderY) * (H / renderH);
+  return { x, y };
+}
+
+function isOverHeart(clientX, clientY) {
+  if (!heartCenter || !heartCenter.radius) return false;
+  const { x, y } = getCanvasCoords({ clientX, clientY });
+  const dx = x - heartCenter.x;
+  const dy = y - heartCenter.y;
+  return Math.hypot(dx, dy) <= heartCenter.radius;
+}
+
+view.addEventListener("pointermove", (e) => {
+  if (isOverHeart(e.clientX, e.clientY)) {
+    view.style.cursor = "pointer";
+  } else {
+    view.style.cursor = "default";
+  }
+});
+
+view.addEventListener("pointerdown", (e) => {
+  if (isOverHeart(e.clientX, e.clientY)) {
+    spawnHeartBurst(heartCenter.x, heartCenter.y, 45);
+  }
+});
+
 function draw(frame, t) {
   px32.fill(0);
   const fidx = Math.floor(frame / 3);
@@ -583,6 +699,7 @@ function draw(frame, t) {
     }
   }
   actx.putImageData(img, 0, 0);
+  updateAndDrawHearts(actx);
   ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
   ctx.drawImage(ascii, 0, 0);
   if (settings.glow > 0) {                                                 // แสงฟุ้งรอบดอก: ย่อภาพลงทีละครึ่งแล้วขยายทับ
