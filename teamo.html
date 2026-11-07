@@ -7,7 +7,7 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block;
-    object-fit: contain; background: #000; }
+    object-fit: contain; background: #000; touch-action: none; }
   #audio-btn {
     position: fixed;
     top: 16px;
@@ -42,7 +42,11 @@ const probe = document.createElement("canvas").getContext("2d");
 probe.font = FONT;
 const CW = Math.max(1, Math.round(probe.measureText("M").width)), CH = Math.round(FONT_SIZE * 1.15);
 const ROWS = 160;
-const COLS = Math.max(150, Math.min(640, Math.round(ROWS * CH / CW * innerWidth / Math.max(1, innerHeight))));
+// Garantizar un aspect ratio panorámico de escritorio (>= 1.45) para que en celulares
+// la composición se mantenga idéntica a la computadora, sin aplastar flores ni texto
+const screenAspect = innerWidth / Math.max(1, innerHeight);
+const effectiveAspect = Math.max(1.45, screenAspect);
+const COLS = Math.max(380, Math.min(640, Math.round(ROWS * CH / CW * effectiveAspect)));
 const N = COLS * ROWS;
 const WAVE_PERIOD = 14, BREATH = 7, BREATH_DEPTH = 0.18;
 const settings = { wind: 3, size: 1.8, glow: 0.6 };
@@ -809,7 +813,9 @@ let resizeTimer = 0;
 addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    const want = Math.max(150, Math.min(640, Math.round(ROWS * CH / CW * innerWidth / Math.max(1, innerHeight))));
+    const sAspect = innerWidth / Math.max(1, innerHeight);
+    const effAspect = Math.max(1.45, sAspect);
+    const want = Math.max(380, Math.min(640, Math.round(ROWS * CH / CW * effAspect)));
     if (Math.abs(want - COLS) > 4) location.reload();
   }, 400);
 });
