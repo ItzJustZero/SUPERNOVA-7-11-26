@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Madonna Lily Bouquet</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block;
+    object-fit: contain; background: #000; }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Lily bouquet — ASCII art animation"></canvas>
+
+<script>
+"use strict";
+// ─── CONFIG ────────────────────────────────────────────────────────────────
+const FONT_SIZE = 10, FPS = 30;
+const FONT = `${FONT_SIZE}px Menlo, Consolas, "DejaVu Sans Mono", "Courier New", monospace`;
+const probe = document.createElement("canvas").getContext("2d");
+probe.font = FONT;
+const CW = Math.max(1, Math.round(probe.measureText("M").width)), CH = Math.round(FONT_SIZE * 1.15);
+const ROWS = 160;
+const COLS = Math.max(150, Math.min(640, Math.round(ROWS * CH / CW * innerWidth / Math.max(1, innerHeight))));
+const N = COLS * ROWS;
+const WAVE_PERIOD = 16, BREATH = 7, BREATH_DEPTH = 0.12;
+const settings = { wind: 1.6, size: 1.85, glow: 0.75 };
+
+// ASCII brightness buckets
+const BUCKETS = [" ", ".'`", ":;,-~", "!/\\|()[]{}<>?+=", "tfjrxnuvczil", "XYUJCLQ0OZmwqpdbkhao", "#MW&8%B", "@$"];
+const LEVELS  = [0.06, 0.15, 0.30, 0.45, 0.60, 0.75, 0.90];
+
+// ─── COLOUR PALETTES ─────────────────────────────────────────────────────
+const STEM_COL   = [0.18, 0.38, 0.16];
+const ANTHER_COL = [0.92, 0.55, 0.06];
+const FILAMENT   = [0.70, 0.60, 0.42];
+const BUD_COL    = [0.38, 0.52, 0.28];
+
+const PALETTES = {
+  pink:   { deep: [0.62, 0.02, 0.30], mid: [0.96, 0.28, 0.55], tip: [1.00, 0.86, 0.92], sheen: [1.00, 0.80, 0.90], vein: [0.90, 0.40, 0.65], spots: 12, anther: ANTHER_COL },
+  white:  { deep: [0.62, 0.80, 0.40], mid: [0.96, 0.96, 0.92], tip: [1.00, 1.00, 0.98], sheen: [1.00, 1.00, 1.00], vein: [0.80, 0.86, 0.78], spots: 0,  anther: [0.75, 0.38, 0.10] },
+  yellow: { deep: [0.92, 0.50, 0.04], mid: [1.00, 0.84, 0.18], tip: [1.00, 0.95, 0.60], sheen: [1.00, 1.00, 0.80], vein: [0.95, 0.75, 0.10], spots: 4,  anther: ANTHER_COL },
+  orange: { deep: [0.80, 0.22, 0.02], mid: [1.00, 0.48, 0.06], tip: [1.00, 0.66, 0.24], sheen: [1.00, 0.82, 0.55], vein: [0.90, 0.40, 0.05], spots: 16, anther: ANTHER_COL },
+  coral:  { deep: [0.88, 0.30, 0.22], mid: [1.00, 0.55, 0.45], tip: [1.00, 0.84, 0.74], sheen: [1.00, 0.92, 0.85], vein: [0.95, 0.55, 0.45], spots: 5,  anther: ANTHER_COL },
+  red:    { deep: [0.30, 0.01, 0.05], mid: [0.72, 0.03, 0.10], tip: [0.92, 0.22, 0.30], sheen: [1.00, 0.52, 0.58], vein: [0.80, 0.10, 0.15], spots: 9,  anther: ANTHER_COL },
+  blush:  { deep: [0.65, 0.42, 0.52], mid: [0.96, 0.78, 0.84], tip: [1.00, 0.90, 0.92], sheen: [1.00, 0.95, 0.97], vein: [0.88, 0.68, 0.74], spots: 0,  anther: ANTHER_COL },
+};
+
+// ─── FLOWER LAYOUT ───────────────────────────────────────────────────────
+// Format: [position [x,y], size, axis [nx,ny,nz], palette, openTime, brightness]
+// Arranged like the painting: tall central stem, flowers at multiple heights
+const FLOWERS_BASE = [
+  // === BOTTOM CLUSTER ===
+  [[-28, 118], 18, [-0.55, -0.20, 0.82], "white",  4.5, 1.00],
+  [[ 26, 112], 17, [ 0.52, -0.18, 0.84], "yellow", 4.8, 1.00],
+  [[  2, 104], 20, [ 0.05, -0.30, 0.95], "coral",  4.2, 1.00],
+
+  // === MID CLUSTER ===
+  [[-30,  76], 17, [-0.68, -0.12, 0.72], "orange", 5.0, 0.95],
+  [[ 34,  70], 16, [ 0.70, -0.10, 0.70], "pink",   5.3, 0.95],
+
+  // === UPPER CLUSTER ===
+  [[-14,  44], 19, [-0.28, -0.52, 0.80], "red",    5.6, 0.90],
+  [[ 18,  40], 18, [ 0.32, -0.55, 0.78], "pink",   5.9, 0.90],
+
+  // === TOP FLOWERS ===
+  [[ -6,  16], 16, [-0.10, -0.72, 0.68], "white",  6.2, 0.82],
+  [[-20,   8], 14, [-0.50, -0.60, 0.62], "yellow", 6.6, 0.78],
+  [[ 20,  12], 13, [ 0.45, -0.65, 0.62], "coral",  6.8, 0.78],
+];
+
+const BUDS_BASE = [
+  [[-10,  -2],  9, [-0.25, -0.95, 0.20], 0.0, "red"],
+  [[ 14,  -4],  8, [ 0.30, -0.93, 0.22], 0.9, "pink"],
+  [[ 38,  48],  8, [ 0.75, -0.60, 0.30], 0.0, "red"],
+  [[-38,  52],  7, [-0.78, -0.55, 0.28], 0.7, "orange"],
+  [[ 28,  84],  7, [ 0.60, -0.70, 0.40], 0.0, "red"],
+];
+
+// ─── MATHS ───────────────────────────────────────────────────────────────
+const TAU = Math.PI * 2, rad = (d) => d * Math.PI / 180;
+const clamp = (x, lo = 0, hi = 1) => (x < lo ? lo : x > hi ? hi : x);
+function smoothstep(a, b, x) { const t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); }
+const wave = (t, k, ph = 0) => Math.sin(TAU * k * t / WAVE_PERIOD + ph);
+function hash3(a, b, c) {
+  let h = (Math.imul(a, 73856093) ^ Math.imul(b, 19349663) ^ Math.imul(c, 83492791)) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  return (h ^ (h >>> 16)) >>> 0;
+}
+const add  = (a, b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+const sub  = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const mul  = (a, s) => [a[0]*s, a[1]*s, a[2]*s];
+const dot  = (a, b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const norm = (v) => mul(v, 1 / (Math.hypot(v[0], v[1], v[2]) + 1e-9));
+// Light from upper-left (matching the painting's light source)
+const LIGHT = norm([-0.6, -0.7, 0.55]);
+
+// ─── CANVAS BUFFERS ──────────────────────────────────────────────────────
+const Xc = new Float32Array(COLS), Yr = new Float32Array(ROWS);
+for (let c = 0; c < COLS; c++) Xc[c] = (c + 0.5 - COLS / 2) * 0.5;
+for (let r = 0; r < ROWS; r++) Yr[r] = r + 0.5;
+const lum = new Float32Array(N), rgb = new Float32Array(N * 3), rowShift = new Float32Array(ROWS);
+// Very subtle dark background texture (like the painting's dark canvas)
+const bgLum = new Float32Array(N), bgRgb = new Float32Array(N * 3);
+for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+  const i = r * COLS + c;
+  // Faint dark olive/grey texture that hints at an old painting background
+  if (hash3(r, c, 3) % 100 < 18) {
+    const v = 0.04 + 0.03 * ((hash3(r, c, 7) % 100) / 100);
+    bgLum[i] = v;
+    bgRgb.set([0.30, 0.28, 0.22], i * 3);  // dark warm grey like old canvas
+  }
+}
+function set(i, l, cr, cg, cb) { lum[i] = l; const j = i * 3; rgb[j] = cr; rgb[j+1] = cg; rgb[j+2] = cb; }
+
+// ─── BRUSH (stroke renderer) ──────────────────────────────────────────────
+const SEG = new Float64Array(16 * 9);
+function brush(pts, hws, av, fn) {
+  const n = pts.length, ns = n - 1;
+  if (n < 2) return;
+  let xmin=1e9,xmax=-1e9,ymin=1e9,ymax=-1e9,maxw=0;
+  for (let k=0;k<n;k++){const x=pts[k][0],y=pts[k][1];if(x<xmin)xmin=x;if(x>xmax)xmax=x;if(y<ymin)ymin=y;if(y>ymax)ymax=y;if(hws[k]>maxw)maxw=hws[k];}
+  for (let s=0;s<ns;s++){const o=s*9,ax=pts[s][0],ay=pts[s][1],dx=pts[s+1][0]-ax,dy=pts[s+1][1]-ay;SEG[o]=ax;SEG[o+1]=ay;SEG[o+2]=dx;SEG[o+3]=dy;SEG[o+4]=1/(dx*dx+dy*dy+1e-9);SEG[o+5]=hws[s];SEG[o+6]=hws[s+1]-hws[s];SEG[o+7]=av[s];SEG[o+8]=av[s+1]-av[s];}
+  const pad=maxw+1;
+  const r0=Math.max(0,Math.floor(ymin-pad)),r1=Math.min(ROWS,Math.ceil(ymax+pad));
+  for (let r=r0;r<r1;r++){
+    const py=Yr[r],sh=rowShift[r];
+    let rx0=1e9,rx1=-1e9;
+    for(let s=0,o=0;s<ns;s++,o+=9){const pw=Math.max(SEG[o+5],SEG[o+5]+SEG[o+6])+1;const ya=SEG[o+1],yb=ya+SEG[o+3];if(py<Math.min(ya,yb)-pw||py>Math.max(ya,yb)+pw)continue;const xa=SEG[o],xb=xa+SEG[o+2];rx0=Math.min(rx0,Math.min(xa,xb)-pw);rx1=Math.max(rx1,Math.max(xa,xb)+pw);}
+    if(rx0>rx1)continue;
+    const c0=Math.max(0,Math.floor((rx0+sh)*2+COLS/2));
+    const c1=Math.min(COLS,Math.ceil((rx1+sh)*2+COLS/2));
+    for(let c=c0;c<c1;c++){
+      const px=Xc[c]-sh;
+      let best=1,bestS=-1,bestU=0;
+      for(let s=0,o=0;s<ns;s++,o+=9){const qx=px-SEG[o],qy=py-SEG[o+1],dx=SEG[o+2],dy=SEG[o+3];let u=(qx*dx+qy*dy)*SEG[o+4];u=u<0?0:u>1?1:u;const ex=qx-dx*u,ey=qy-dy*u;let hw=SEG[o+5]+SEG[o+6]*u;if(hw<1e-3)hw=1e-3;const q2=(ex*ex+ey*ey)/(hw*hw);if(q2<best){best=q2;bestS=s;bestU=u;}}
+      if(bestS<0)continue;
+      const o=bestS*9;
+      const cr=SEG[o+2]*(py-SEG[o+1])-SEG[o+3]*(px-SEG[o]);
+      const side=cr>0?1:cr<0?-1:0;
+      fn(r*COLS+c, SEG[o+7]+SEG[o+8]*bestU, Math.sqrt(best)*side, r, c);
+    }
+  }
+}
+const lin = (n) => Array.from({length:n},(_,k)=>k/(n-1));
+const lerp3 = (a, b, k) => { k=clamp(k); return [a[0]+(b[0]-a[0])*k, a[1]+(b[1]-a[1])*k, a[2]+(b[2]-a[2])*k]; };
+
+// ─── STEM / TUBE ─────────────────────────────────────────────────────────
+function tube(pts, w0, w1, col) {
+  const n = pts.length;
+  if (n < 2) return;
+  const hws = lin(n).map((k) => w0 + (w1 - w0) * k);
+  // Dark green stem with lighter highlight on one side (like the painting)
+  const dark = mul(col, 0.55), lite = mul(col, 1.30);
+  brush(pts, hws, lin(n), (i, a, q) => {
+    const k = clamp(0.5 - 0.45 * q);  // highlight on left side
+    set(i, 0.38 + 0.32 * (1 - Math.abs(q)) - 0.12 * q,
+      dark[0]+(lite[0]-dark[0])*k, dark[1]+(lite[1]-dark[1])*k, dark[2]+(lite[2]-dark[2])*k);
+  });
+}
+function curve(p0, p1, bulge, grow, n = 12) {
+  const dx=p1[0]-p0[0],dy=p1[1]-p0[1],L=Math.hypot(dx,dy)+1e-9;
+  const nx=-dy/L,ny=dx/L,out=[];
+  for(let k=0;k<n;k++){const s=(k/(n-1))*grow,b=bulge*Math.sin(Math.PI*s);out.push([p0[0]+dx*s+nx*b,p0[1]+dy*s+ny*b]);}
+  return out;
+}
+
+// ─── LEAVES ──────────────────────────────────────────────────────────────
+// Madonna lily leaves: narrow, lanceolate, mid-green, prominent midrib
+const LEAF_D = [0.08, 0.30, 0.10];   // dark green
+const LEAF_L = [0.28, 0.58, 0.22];   // lighter green
+const LEAF_UNDER = [0.36, 0.58, 0.44];  // underside: lighter, slightly grey-green
+const LEAF_MID = [0.18, 0.44, 0.16];    // midrib colour
+
+function leaf(L, t, unfurl) {
+  if (unfurl <= 0.01) return;
+  const n = 14;
+  const len = L.len * (0.3 + 0.7 * unfurl);
+  const wid = L.wid * (0.4 + 0.6 * unfurl);
+  const ang0 = L.stemAng + (L.ang - L.stemAng) * unfurl;
+  const sway = rad(2.5) * wave(t, 3, L.seed);  // gentle sway
+  const pts = [], hws = [];
+  let x = L.x, y = L.y;
+  for (let k = 0; k < n; k++) {
+    const a = k / (n - 1);
+    pts.push([x, y]);
+    const tw = Math.cos(L.twist * a + L.phase);
+    // Lanceolate shape: widest at ~1/3, tapering to sharp tip
+    const profile = Math.sin(Math.PI * Math.pow(a, 0.4)) * Math.pow(1 - a, 0.5);
+    hws.push(Math.max(0.05, wid * profile * (0.2 + 0.8 * Math.abs(tw))));
+    const bend = L.droop * Math.pow(a, 1.8) + L.kink * smoothstep(L.kinkAt - 0.05, L.kinkAt + 0.05, a);
+    const ang = ang0 + sway * a + L.dir * bend * unfurl;
+    x += Math.cos(ang) * len / (n - 1);
+    y += Math.sin(ang) * len / (n - 1);
+  }
+  brush(pts, hws, lin(n), (i, a, q) => {
+    const aq = Math.abs(q), back = Math.cos(L.twist * a + L.phase) < 0;
+    const lit = (q > 0) !== back ? 1 : 0;
+    // Midrib groove
+    let l = (0.38 + 0.30 * lit + 0.24 * Math.pow(1 - aq, 0.8));
+    if (aq < 0.07) l = back ? 0.72 : 0.30;  // midrib: bright on underside, dark groove on top
+    else if (aq > 0.90) l += 0.10;            // leaf edge catches light
+    l *= 0.82 + 0.18 * clamp(a * 5);          // base in stem shadow
+    // Vein lines (fine parallel veins typical of lily)
+    l += 0.04 * Math.cos(q * Math.PI * 8) * (1 - aq) * (1 - a);
+    let c = back
+      ? lerp3(mul(LEAF_UNDER, 0.75), LEAF_UNDER, 0.3 + 0.7 * (1 - aq))
+      : lerp3(LEAF_D, LEAF_L, 0.25 + 0.50 * lit + 0.25 * (1 - aq));
+    // Slight yellowing near tip on old leaves
+    if (L.old) c = lerp3(c, [0.60, 0.58, 0.20], clamp((a - 0.82) * 5));
+    set(i, clamp(l), c[0], c[1], c[2]);
+  });
+}
+
+// ─── LILY FLOWER (realistic trumpet lily) ────────────────────────────────
+// Key anatomical features:
+//   • 6 tepals (3 inner + 3 outer), broad and reflexing at tips
+//   • Long curved filaments with large club-shaped anthers
+//   • Single central pistil longer than stamens
+//   • Prominent central stripe (nectary guide) on each petal
+
+function lily(center, axis, size, openness, ripe, t, seed, pal, bright) {
+  if (size <= 0.3) return;
+  const anther = pal.anther || ANTHER_COL;
+  const a3 = norm(axis);
+  const ref = Math.abs(a3[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  const u3 = norm(cross(a3, ref)), v3 = cross(a3, u3);
+  const c3 = [center[0], center[1], 0];
+
+  // Spin slowly — no rapid rotation, just a gentle natural orientation
+  const spin = rad(12) + rad(2.5) * wave(t, 2, seed);
+
+  // ── PETALS ──────────────────────────────────────────────────────────
+  // Real lily tepals: outer 3 narrower, inner 3 broader, all strongly reflexed at tips
+  const petals = [];
+  for (let k = 0; k < 6; k++) {
+    const inner = k % 2 === 1;
+    const phi = spin + k * Math.PI / 3 + (inner ? Math.PI / 3 : 0);
+    const radial = add(mul(u3, Math.cos(phi)), mul(v3, Math.sin(phi)));
+    const tangent = cross(a3, radial);
+
+    // Spread angle: trumpet shape opens from ~20° closed to 75° open
+    const spreadBase = inner ? 72 : 68;
+    const theta = rad(8 + spreadBase * openness);
+
+    // Strong reflex curl at petal tip (the hallmark of madonna/easter lily)
+    const reflexStrength = inner ? 0.80 : 0.72;
+    const curl = rad(65) * reflexStrength * Math.pow(Math.max(openness, 0), 1.2);
+
+    // Length and width: inner tepals broader (more showy)
+    const L = size * (inner ? 1.00 : 0.92);
+    const W = size * (inner ? 0.32 : 0.24);  // wider than original for realistic look
+    const n = 11;
+
+    const pts3 = [], hws = [];
+    let p = add(c3, mul(radial, size * 0.03));
+    for (let i = 0; i < n; i++) {
+      const a = i / (n - 1);
+      pts3.push(p);
+      // Petal shape: broadens quickly from base then narrows to point
+      // Real lily petal: widest at ~40% of length
+      const profile = Math.pow(Math.sin(Math.PI * Math.pow(a, 0.55)), 0.75);
+      hws.push(W * profile);
+      // Gradually increase reflex at tip
+      const th = theta + curl * Math.pow(a, 1.5);
+      p = add(p, mul(add(mul(a3, Math.cos(th)), mul(radial, Math.sin(th))), L / (n - 1)));
+    }
+    const tangDir = norm(tangent);
+    const normal = norm(cross(norm(sub(pts3[Math.floor(n/2)], pts3[0])), tangDir));
+    const facing = normal[2];
+    const tproj = Math.hypot(tangent[0], tangent[1]);
+    petals.push({
+      depth: pts3.reduce((s, q) => s + q[2], 0) / n,
+      pts: pts3.map((q) => [q[0], q[1]]),
+      hws: hws.map((h) => Math.max(h * Math.max(tproj, 0.28), 0.06)),
+      normal, facing, pseed: seed * 10 + k, inner, k,
+    });
+  }
+  petals.sort((a, b) => a.depth - b.depth);  // back-to-front
+
+  const dim = 0.52 + 0.48 * bright;
+  const av = lin(11);
+  for (const pt of petals) {
+    const sg = pt.facing < 0 ? -1 : 1;
+    // Lighting: more diffuse for white flowers (lots of ambient bounce)
+    const diffuse = Math.max(0, dot(mul(pt.normal, sg), LIGHT));
+    const light = 0.42 + 0.58 * diffuse;  // high ambient — white petals glow
+    const back = pt.facing < 0;
+
+    brush(pt.pts, pt.hws, av, (i, a, q, r, c) => {
+      const aq = Math.abs(q);
+      // Base shading: petal fold — midrib darker, edges slightly lit
+      let l = light * (0.58 + 0.42 * Math.pow(1 - aq, 0.5)) * (back ? 0.76 : 1.0);
+      // Trumpet base: darker at centre throat
+      l *= 0.65 + 0.45 * clamp(a * 1.8);
+      // Midrib / nectary guide stripe — greenish stripe down centre
+      if (aq < 0.09) l *= 0.70;
+      // Petal edges: catch light, appear brighter
+      if (aq > 0.88) l = Math.min(l * 1.18, 1.0);
+      // Fine longitudinal striations
+      l += 0.025 * Math.cos(q * Math.PI * 5) * (1 - aq) * clamp(a * 3);
+
+      // Colour: deep greenish at base → white/pink mid → bright white/cream tip
+      let col = lerp3(pal.deep, pal.mid, clamp(a * 2.0));
+      col = lerp3(col, pal.tip, clamp((a - 0.45) * 2.2 + (aq - 0.65) * 1.8));
+      // Specular sheen on lit side
+      col = lerp3(col, pal.sheen, clamp((light - 0.70) * 3.0 * (1 - aq * 0.7)));
+      // Ripe/bud greenish tint at base
+      col = lerp3(BUD_COL, col, clamp(ripe * 0.8 + a * 1.2));
+      // Back of petal: same colour but slightly more transparent/grey
+      if (back) col = lerp3(col, [0.90, 0.90, 0.88], 0.15);
+
+      // Nectary guide: greenish central stripe on the front face
+      if (!back && aq < 0.12 && a > 0.05 && a < 0.65) {
+        col = lerp3(col, pal.vein, 0.35 * (1 - a * 1.5) * (1 - aq * 8));
+      }
+
+      set(i, clamp(l) * bright, col[0] * dim, col[1] * dim, col[2] * dim);
+    });
+  }
+
+  // ── STAMENS & PISTIL ────────────────────────────────────────────────
+  // Lilies have 6 long stamens + 1 pistil, all strongly curving outward
+  const show = smoothstep(0.30, 0.78, openness);
+  if (show <= 0) return;
+
+  // Pistil (central, longest, with 3-lobed stigma)
+  const pistilLen = size * 0.78 * show;
+  const pistilDir = norm(add(mul(a3, 0.92), mul(u3, 0.12)));
+  const pTip = add(c3, mul(pistilDir, pistilLen));
+  const pMid = add(c3, mul(pistilDir, pistilLen * 0.5));
+  brush([[c3[0],c3[1]], [pMid[0],pMid[1]], [pTip[0],pTip[1]]],
+    [0.18, 0.15, 0.13], [0, 0.5, 1],
+    (i) => set(i, 0.52 * bright, FILAMENT[0], FILAMENT[1] * 0.9, FILAMENT[2] * 0.7));
+  // Stigma tip (3-lobed, greenish)
+  brush([[pTip[0]-0.5, pTip[1]], [pTip[0]+0.5, pTip[1]]],
+    [0.45, 0.45], [0, 1],
+    (i) => set(i, 0.70 * bright, 0.42, 0.68, 0.30));
+
+  // 6 Stamens: curved outward with heavy orange anthers
+  for (let k = 0; k < 6; k++) {
+    const phi = spin + k * TAU / 6;
+    const radial = add(mul(u3, Math.cos(phi)), mul(v3, Math.sin(phi)));
+    // Stamen curves: starts along axis, arches outward
+    const archAngle = rad(32) * openness;
+    const stDir = norm(add(mul(a3, Math.cos(archAngle)), mul(radial, Math.sin(archAngle))));
+    const stLen = size * 0.62 * show;
+    const stTip = add(c3, mul(stDir, stLen));
+    const stMid = add(add(c3, mul(stDir, stLen * 0.5)), mul(radial, size * 0.08));
+
+    // Filament (thin, pale green-cream)
+    brush([[c3[0],c3[1]], [stMid[0],stMid[1]], [stTip[0],stTip[1]]],
+      [0.16, 0.13, 0.10], [0, 0.5, 1],
+      (i) => set(i, 0.48 * bright, FILAMENT[0], FILAMENT[1], FILAMENT[2]));
+
+    // Anther: large, club-shaped, rich amber-orange
+    // Real lily anthers are elongated and sag slightly
+    const aLen = size * 0.14;
+    const a1 = [stTip[0] - stDir[0]*aLen*0.6, stTip[1] - stDir[1]*aLen*0.6];
+    const a2 = [stTip[0] + stDir[0]*aLen*0.4, stTip[1] + stDir[1]*aLen*0.4];
+    brush([a1, [stTip[0], stTip[1]], a2],
+      [0.55, 0.60, 0.55], [0, 1],
+      (i, a) => {
+        // Rich orange with darker ends, yellow pollen scatter
+        const pollen = hash3(i, k, 42) % 100 < 15 ? 0.3 : 0;
+        set(i, (0.85 + pollen * 0.1) * bright,
+          anther[0] + pollen * 0.1,
+          anther[1] * 0.9 + pollen * 0.3,
+          anther[2] * 0.4);
+      });
+  }
+}
+
+// ─── LAYOUT BUILDER ──────────────────────────────────────────────────────
+const rnd = (k) => hash3(k, 911, 37) / 4294967296;
+const STEM_DUR = 1.0;
+const easeOut = (x) => 1 - Math.pow(1 - clamp(x), 3);
+let FLOWERS = [], BUDS = [];
+
+function pathAt(path, frac) {
+  const f = frac * (path.length - 1), k = Math.min(path.length - 2, Math.floor(f)), u = f - k;
+  const a = path[k], b = path[k + 1];
+  return { x: a[0]+(b[0]-a[0])*u, y: a[1]+(b[1]-a[1])*u, ang: Math.atan2(b[1]-a[1], b[0]-a[0]) };
+}
+
+function buildLayout() {
+  const fl = FLOWERS_BASE.map(([pos, size, axis, col, tOpen, bright], i) => ({
+    pos, size, axis, col, bright,
+    baseX: pos[0] * 0.10,
+    bulge: 2.0 * Math.sign(pos[0] || 1) * (i % 2 ? 1 : -0.5),
+    start: 0.04 + 0.028 * i,
+    tOpen: 1.5 + (tOpen - 4.2) * 0.52,
+  }));
+  const bd = BUDS_BASE.map(([pos, size, axis, ripe, col], i) => ({
+    pos, size, axis, ripe, col,
+    baseX: pos[0] * 0.10,
+    bulge: 2.0 * Math.sign(pos[0] || 1) * (i % 2 ? -0.5 : 1),
+    start: 0.12 + 0.04 * i,
+  }));
+  for (const o of [...fl, ...bd]) {
+    o.end = o.start + STEM_DUR;
+    o.path = curve([o.baseX, 175], o.pos, o.bulge, 1, 14);
+  }
+  fl.forEach((f, i) => {
+    f.tOpen = Math.max(f.tOpen, f.end + 0.5);
+    const front = f.bright > 0.85;
+    const fv0 = clamp((175 - (ROWS - 4)) / (175 - f.pos[1]), 0.04, 0.6);
+    const fv1 = Math.min(0.80, fv0 + 0.65);
+    // More leaves per stem — lilies are well-leafed
+    const fracs = front ? [0, 0.18, 0.36, 0.54, 0.70, 0.84].map((u) => fv0 + (fv1 - fv0) * u) : [0.50, 0.68];
+    f.leaves = fracs.map((fr, j) => {
+      const sd = i * 31 + j * 7 + 3;
+      const frac = clamp(fr + (rnd(sd) - 0.5) * 0.04, 0.04, 0.84);
+      const p = pathAt(f.path, frac), side = (i + j) % 2 ? 1 : -1;
+      // Lily leaves: spread at ~30-50° from stem
+      const ang = p.ang + side * rad(32 + rnd(sd + 1) * 25);
+      return {
+        x: p.x, y: p.y, stemAng: p.ang, ang, dir: Math.cos(ang) >= 0 ? 1 : -1, seed: sd,
+        len: (38 - j * 4) * (0.75 + rnd(sd + 2) * 0.5) * (front ? 1 : 0.70),
+        wid: 2.5 + rnd(sd + 3) * 1.2,
+        droop: rad(18 + rnd(sd + 4) * 35) * (1 - frac * 0.5),
+        kink: rnd(sd + 5) < 0.35 ? rad(30 + rnd(sd + 6) * 40) : 0,
+        kinkAt: 0.4 + rnd(sd + 7) * 0.3,
+        twist: 0.8 + rnd(sd + 8) * 2.0, phase: rnd(sd + 9) * TAU, old: rnd(sd + 10) < 0.20,
+        tAt: f.start + STEM_DUR * (1 - Math.cbrt(1 - frac)),
+      };
+    });
+  });
+  FLOWERS = fl; BUDS = bd;
+}
+buildLayout();
+
+// ─── ASCII TEXT MASK ──────────────────────────────────────────────────────
+const TXT1 = "for my beloved";
+const TXT2 = "I love u \u2665";
+const TXT3 = "7/11/2026";
+const textMask = new Float32Array(N * 4);  // per cell: [lum, r, g, b]
+let txtCol1Lo = COLS, txtCol1Hi = 0;
+let txtCol2Lo = COLS, txtCol2Hi = 0;
+let txtCol3Lo = COLS, txtCol3Hi = 0;
+let txtRowSplit = 0;   // first row of line 2
+let txtRow3Lo  = 0;    // first row of date
+
+(function buildTextMask() {
+  const PW = COLS * CW, PH = ROWS * CH;
+  const off = document.createElement("canvas");
+  off.width = PW; off.height = PH;
+  const ox = off.getContext("2d");
+
+  // ── Main text: left of flowers, block vertically centred on the page ──
+  // Flowers occupy roughly cols COLS/2-76 … COLS/2+76 in world mapping.
+  // Restrict text to left 28 % of columns so it never touches a petal.
+  const maxGridW = Math.round(COLS * 0.28);
+  const maxPxW   = maxGridW * CW;
+  const xPx      = Math.round(COLS * 0.02) * CW;   // left margin
+
+  // Fit line 1
+  let fs1 = CH * 11;
+  ox.font = `italic 400 ${fs1}px Georgia, "Times New Roman", serif`;
+  while (fs1 > CH * 3 && ox.measureText(TXT1).width > maxPxW) {
+    fs1--; ox.font = `italic 400 ${fs1}px Georgia, "Times New Roman", serif`;
+  }
+  // Fit line 2 (bolder, slightly larger)
+  let fs2 = CH * 14;
+  ox.font = `italic 700 ${fs2}px Georgia, "Times New Roman", serif`;
+  while (fs2 > CH * 4 && ox.measureText(TXT2).width > maxPxW) {
+    fs2--; ox.font = `italic 700 ${fs2}px Georgia, "Times New Roman", serif`;
+  }
+
+  const lineGap = Math.round(fs1 * 1.4);
+  const blockH  = lineGap + fs2;
+  // Centre the two-line block vertically on the canvas
+  const y1px = Math.round((PH - blockH) / 2);
+  const y2px = y1px + lineGap;
+  txtRowSplit = Math.round((y1px + lineGap * 0.9) / CH);
+
+  ox.textBaseline = "top";
+  ox.fillStyle    = "#fff";
+  ox.font = `italic 400 ${fs1}px Georgia, "Times New Roman", serif`;
+  ox.fillText(TXT1, xPx, y1px);
+  ox.font = `italic 700 ${fs2}px Georgia, "Times New Roman", serif`;
+  ox.fillText(TXT2, xPx, y2px);
+
+  // ── Date: bottom-right corner, smaller, right-aligned ────────────────
+  let fs3 = CH * 7;
+  ox.font = `italic 400 ${fs3}px Georgia, "Times New Roman", serif`;
+  while (fs3 > CH * 2 && ox.measureText(TXT3).width > PW * 0.30) {
+    fs3--; ox.font = `italic 400 ${fs3}px Georgia, "Times New Roman", serif`;
+  }
+  const rightMargin = Math.round(COLS * 0.02) * CW;
+  const x3px = PW - rightMargin - ox.measureText(TXT3).width;
+  const y3px = Math.round(PH - fs3 * 2.4);
+  txtRow3Lo  = Math.round(y3px / CH);
+  ox.font = `italic 400 ${fs3}px Georgia, "Times New Roman", serif`;
+  ox.fillText(TXT3, x3px, y3px);
+
+  // ── Downsample to grid ────────────────────────────────────────────────
+  const data = ox.getImageData(0, 0, PW, PH).data;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const px0 = c * CW, py0 = r * CH;
+      let sum = 0;
+      for (let dy = 0; dy < CH; dy++)
+        for (let dx = 0; dx < CW; dx++)
+          sum += data[((py0 + dy) * PW + (px0 + dx)) * 4 + 3];
+      const v = sum / (CW * CH * 255);
+      if (v < 0.04) continue;
+      const i   = r * COLS + c;
+      const ln3 = r >= txtRow3Lo;
+      const ln2 = !ln3 && r >= txtRowSplit;
+      textMask[i * 4]     = v;
+      // All text: pure white
+      textMask[i * 4 + 1] = 1.00;
+      textMask[i * 4 + 2] = 1.00;
+      textMask[i * 4 + 3] = 1.00;
+      if      (ln3) { if (c < txtCol3Lo) txtCol3Lo = c; if (c > txtCol3Hi) txtCol3Hi = c; }
+      else if (ln2) { if (c < txtCol2Lo) txtCol2Lo = c; if (c > txtCol2Hi) txtCol2Hi = c; }
+      else          { if (c < txtCol1Lo) txtCol1Lo = c; if (c > txtCol1Hi) txtCol1Hi = c; }
+    }
+  }
+})();
+
+// ─── SCENE ───────────────────────────────────────────────────────────────
+function scene(t) {
+  // Gentle breeze — less than original, lilies are heavy flowers
+  for (let r = 0; r < ROWS; r++) {
+    const h = clamp((ROWS + 10 - Yr[r]) / 140), w = t - 0.35 * h;
+    rowShift[r] = settings.wind * (0.5 * wave(w, 2) + 0.3 * wave(w, 3, 1) + 0.1 * wave(w, 5, 2)) * Math.pow(h, 1.4);
+  }
+  lum.set(bgLum); rgb.set(bgRgb);
+  const growOf = (o) => easeOut((t - o.start) / STEM_DUR);
+
+  // Leaves
+  for (const f of FLOWERS) for (const L of f.leaves) leaf(L, t, smoothstep(L.tAt, L.tAt + 0.60, t));
+
+  // Stems — thicker at base (realistic lily stem)
+  for (const b of BUDS)    tube(curve([b.baseX, 175], b.pos, b.bulge, growOf(b), 14), 0.80, 0.40, STEM_COL);
+  for (const f of FLOWERS) tube(curve([f.baseX, 175], f.pos, f.bulge, growOf(f), 14), 1.00, 0.50, STEM_COL);
+
+  // Flowers — back to front
+  FLOWERS.forEach((f, i) => {
+    if (t < f.end) return;
+    const swell    = smoothstep(f.end, f.end + 0.65, t);
+    const ripe     = smoothstep(f.tOpen - 1.1, f.tOpen + 0.4, t);
+    const opening  = smoothstep(f.tOpen, f.tOpen + 1.8, t);
+    const breathe  = BREATH_DEPTH * (0.5 - 0.5 * Math.cos(TAU * (t - f.tOpen - 3) / BREATH + i * 0.85))
+                     * smoothstep(f.tOpen + 1.8, f.tOpen + 3.2, t);
+    const openness = opening * (1 - breathe);
+    const s = f.size * settings.size * (0.35 + 0.65 * swell) * (0.5 + 0.5 * Math.max(openness, ripe * 0.6));
+    lily(f.pos, f.axis, s, openness, ripe, t, i * 7 + 3, PALETTES[f.col], f.bright);
+  });
+
+  // Buds
+  BUDS.forEach((b, i) => {
+    if (t < b.end) return;
+    const swell = smoothstep(b.end, b.end + 0.65, t);
+    lily(b.pos, b.axis, b.size * (0.4 + 0.6 * swell), 0.03 + 0.025 * wave(t, 2, i),
+      b.ripe * swell, t, 90 + i, PALETTES[b.col], 0.88);
+  });
+
+  // ── Fireflies: golden sparks drifting upward ──────────────────────────
+  const fv = 0.80 * smoothstep(2.5, 5.0, t);
+  if (fv > 0) {
+    const off  = Math.floor(t * 6);
+    const off2 = Math.floor(t * 2.2);
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const i = r * COLS + c;
+        if (lum[i] > 0.14) continue;
+        // Single-cell dot only — no neighbours, no halos
+        const h1 = hash3(c, r + off,  77) % 1000;
+        const h2 = hash3(c * 3, r + off2, 53) % 1000;
+        if (h1 >= 6 && h2 >= 3) continue;   // sparse: ~6+3 per 1000 cells
+        const twinkle = 0.55 + 0.45 * ((hash3(c, r + off, 199) % 100) / 100);
+        const hv = (hash3(c, 0, 31) % 100) / 100;
+        set(i, fv * twinkle, 1.00, 0.80 + hv * 0.12, 0.25 + hv * 0.15);
+      }
+    }
+  }
+
+  // ── ASCII text wipe (left → right, column by column) ──────────────────
+  const T1S = 6.2, T1D = 1.9;
+  const T2S = 8.2, T2D = 1.5;
+  const T3S = 9.8, T3D = 1.4;   // date appears last, bottom-right
+  const w1 = smoothstep(T1S, T1S + T1D, t);
+  const w2 = smoothstep(T2S, T2S + T2D, t);
+  const w3 = smoothstep(T3S, T3S + T3D, t);
+  if (w1 > 0 || w2 > 0 || w3 > 0) {
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const i = r * COLS + c;
+      const v = textMask[i * 4];
+      if (v < 0.04) continue;
+      const ln3  = r >= txtRow3Lo;
+      const ln2  = !ln3 && r >= txtRowSplit;
+      const lo   = ln3 ? txtCol3Lo : ln2 ? txtCol2Lo : txtCol1Lo;
+      const hi   = ln3 ? txtCol3Hi : ln2 ? txtCol2Hi : txtCol1Hi;
+      const wipe = ln3 ? w3 : ln2 ? w2 : w1;
+      if (hi > lo && (c - lo) / (hi - lo) > wipe) continue;
+      const tr = textMask[i * 4 + 1];
+      const tg = textMask[i * 4 + 2];
+      const tb = textMask[i * 4 + 3];
+      const TS = ln3 ? T3S : ln2 ? T2S : T1S;
+      const TD = ln3 ? T3D : ln2 ? T2D : T1D;
+      const wi = ln3 ? w3  : ln2 ? w2  : w1;
+      const shimmer = 0.055 * Math.max(0, Math.sin(TAU * (t - TS - TD) / 2.8)) * (wi >= 1 ? 1 : 0);
+      set(i, clamp(v * 1.08 + shimmer), tr, tg, tb);
+    }
+  }
+
+  // Fade in
+  const fade = smoothstep(0, 0.25, t);
+  if (fade < 1) for (let i = 0; i < N; i++) lum[i] *= fade;
+}
+
+// ─── ASCII RENDERER ───────────────────────────────────────────────────────
+const view = document.getElementById("view"), ctx = view.getContext("2d");
+const W = COLS * CW, H = ROWS * CH;
+view.width = W; view.height = H;
+const CHARS = BUCKETS.join(""), START = [], COUNT = BUCKETS.map((b) => b.length);
+BUCKETS.reduce((s, b, k) => { START[k] = s; return s + b.length; }, 0);
+const MASKS = [...CHARS].map((ch) => {
+  const g = document.createElement("canvas"); g.width = CW; g.height = CH;
+  const gx = g.getContext("2d");
+  gx.font = FONT; gx.textBaseline = "top"; gx.fillStyle = "#fff"; gx.fillText(ch, 0, 0);
+  const d = gx.getImageData(0, 0, CW, CH).data, m = new Uint8Array(CW * CH);
+  for (let k = 0; k < m.length; k++) m[k] = d[k * 4 + 3];
+  return m;
+});
+const ascii = document.createElement("canvas"); ascii.width = W; ascii.height = H;
+const actx = ascii.getContext("2d");
+const img = actx.createImageData(W, H), px = img.data, px32 = new Uint32Array(px.buffer);
+
+const glowA = document.createElement("canvas"), glowB = document.createElement("canvas"), glowC = document.createElement("canvas");
+[[glowA, 2], [glowB, 4], [glowC, 8]].forEach(([g, s]) => { g.width = Math.ceil(W / s); g.height = Math.ceil(H / s); });
+
+function draw(frame, t) {
+  px32.fill(0);
+  const fidx = Math.floor(frame / 3);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const i = r * COLS + c, L = lum[i];
+    let level = 0;
+    while (level < LEVELS.length && L >= LEVELS[level]) level++;
+    if (level === 0) continue;
+    const ch = START[level] + hash3(r, c, fidx) % COUNT[level], m = MASKS[ch];
+    const k = (0.42 + 0.78 * L) * 1.55 / 255 * 255, j = i * 3;
+    const R = rgb[j] * k, G = rgb[j+1] * k, B = rgb[j+2] * k;
+    let o0 = (r * CH) * W + c * CW, mi = 0;
+    for (let y = 0; y < CH; y++, o0 += W) {
+      for (let x = 0; x < CW; x++, mi++) {
+        const v = m[mi];
+        if (v) {
+          const pr = Math.min(255, 255 * R) | 0, pg = Math.min(255, 255 * G) | 0, pb = Math.min(255, 255 * B) | 0;
+          px32[o0 + x] = (v << 24) | (pb << 16) | (pg << 8) | pr;
+        }
+      }
+    }
+  }
+  actx.putImageData(img, 0, 0);
+  // Dark background (like painting's near-black background)
+  ctx.fillStyle = "#04040a"; ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(ascii, 0, 0);
+  // Soft glow — white flowers naturally bloom in dark backgrounds
+  if (settings.glow > 0) {
+    let src = ascii;
+    for (const g of [glowA, glowB, glowC]) {
+      const gx = g.getContext("2d");
+      gx.imageSmoothingEnabled = true; gx.clearRect(0, 0, g.width, g.height);
+      gx.drawImage(src, 0, 0, g.width, g.height); src = g;
+    }
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter"; ctx.globalAlpha = Math.min(1, settings.glow * 0.85);
+    ctx.imageSmoothingEnabled = true; ctx.drawImage(glowC, 0, 0, W, H);
+    if (settings.glow > 1) { ctx.globalAlpha = settings.glow - 1; ctx.drawImage(glowC, 0, 0, W, H); }
+    ctx.restore();
+  }
+}
+
+// ─── MAIN LOOP ────────────────────────────────────────────────────────────
+let t0 = performance.now(), lastDraw = -1e9;
+function tick(now) {
+  if (now - lastDraw >= 1000 / FPS - 2) {
+    lastDraw = now;
+    const t = (now - t0) / 1000;
+    scene(t);
+    draw(Math.floor(t * FPS), t);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+let resizeTimer = 0;
+addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const want = Math.max(150, Math.min(640, Math.round(ROWS * CH / CW * innerWidth / Math.max(1, innerHeight))));
+    if (Math.abs(want - COLS) > 4) location.reload();
+  }, 400);
+});
+</script>
+</body>
+</html>
